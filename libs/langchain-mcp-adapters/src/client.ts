@@ -477,7 +477,10 @@ export class MCPAdapter {
 
     try {
       await this.#clientConnections.finishAuth(
-        { ...connection, authProvider: provider.data },
+        {
+          ...connection,
+          ...this.#transportOptions(serverName, { authProvider: provider.data }),
+        },
         params
       );
     } catch (error) {

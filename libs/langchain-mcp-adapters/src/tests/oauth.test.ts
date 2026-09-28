@@ -777,6 +777,35 @@ describe("OAuth behavior on SDK 2.1", () => {
     ).toBe("Bearer b");
   });
 
+  it("keeps the last spelling on the finishAuth leg too", async () => {
+    const server = await fixture();
+    const provider = createTestOAuthProvider();
+    const mcp = adapter({
+      servers: {
+        svc: {
+          transport: "http",
+          url: server.mcpUrl,
+          headers: { authorization: "Bearer a", Authorization: "Bearer b" },
+          authProvider: provider,
+        },
+      },
+    });
+    await failure(mcp.listTools());
+
+    const before = server.requests.length;
+    await mcp.finishAuth(
+      "svc",
+      await authorizeInBrowser(provider.redirects[0])
+    );
+    const finishAuthSpellings = new Set(
+      server.requests
+        .slice(before)
+        .map((request) => request.authorization)
+        .filter((value) => value !== undefined)
+    );
+    expect(finishAuthSpellings).toEqual(new Set(["Bearer b"]));
+  });
+
   // Upstream #2510: the SDK cannot complete a mid-session redirect itself. A
   // stateless finishAuth lets the live connection pick up the new tokens.
   it("characterization: a login that lapses mid-session completes through finishAuth", async () => {
