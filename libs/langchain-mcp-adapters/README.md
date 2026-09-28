@@ -100,7 +100,10 @@ for argument and result hooks.
 
 - `{ token, onUnauthorized? }` (`AuthProvider`) for tokens your application
   manages. `token()` runs before every request; `onUnauthorized()` runs once
-  on a 401 before the request is retried.
+  on a 401 before the request is retried. A connection failure's cause is the
+  SDK's `UnauthorizedError` when a login is needed, or an HTTP 401 error
+  (`SdkHttpError`) when credentials are still rejected after `onUnauthorized`
+  or a refresh.
 - An `OAuthClientProvider` for OAuth. The SDK handles discovery, registration,
   exchange and refresh; your application owns storage, redirects and the
   callback. Implement `invalidateCredentials()` so a refresh the server
