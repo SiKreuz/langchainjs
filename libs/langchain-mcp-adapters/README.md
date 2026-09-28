@@ -112,7 +112,12 @@ for argument and result hooks.
   `cause`. After the redirect, call
   `adapter.finishAuth(serverName, new URL(callbackUrl).searchParams, { expectedState })`
   and connect again. Don't start another discovery while a login is pending:
-  it begins a new redirect and invalidates the first callback.
+  it begins a new redirect and invalidates the first callback. Make the
+  callback single-use: look up and delete the pending `state` before calling
+  `finishAuth`, and don't call it for a `state` that's already gone. Otherwise
+  a refresh, a double-invoked handler, or a back-button replay redeems the
+  same code twice, and the SDK responds by discarding the tokens the first
+  call just saved, logging the user out.
 
 Once a provider has a token it replaces a configured `Authorization` header;
 until then the header is sent.

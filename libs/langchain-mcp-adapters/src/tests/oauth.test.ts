@@ -863,4 +863,21 @@ describe("OAuth behavior on SDK 2.1", () => {
     await failure(mcp.finishAuth("svc", callback));
     expect(server.stats.exchanges).toBe(0);
   });
+
+  // The SDK's auth() treats invalid_grant on the code leg the same as a
+  // rejected refresh and invalidates stored tokens, so a replayed callback
+  // logs the user out right after a successful login (I1). Applications must
+  // make the callback single-use themselves; see the README.
+  it("characterization: replaying a used callback rejects and discards the stored tokens", async () => {
+    const { provider, mcp, callback } = await pendingLogin();
+    await mcp.finishAuth("svc", callback);
+    expect(provider.stored.tokens).toBeDefined();
+
+    await failure(mcp.finishAuth("svc", callback));
+    expect(provider.stored.tokens).toBeUndefined();
+
+    const redirectsBefore = provider.redirects.length;
+    await failure(mcp.listTools());
+    expect(provider.redirects).toHaveLength(redirectsBefore + 1);
+  });
 });
