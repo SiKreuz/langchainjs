@@ -105,8 +105,6 @@ export const callbackParamsSchema = z.instanceof(URLSearchParams, {
 
 export const finishAuthOptionsSchema = z
   .object({
-    /** Overrides the server's configured provider, as per-call discovery options do. */
-    authProvider: oAuthClientProviderSchema.optional(),
     /** The `state` your application issued for this attempt; checked before the SDK runs. */
     expectedState: z
       .string()

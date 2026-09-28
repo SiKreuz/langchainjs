@@ -1,5 +1,7 @@
 export { MCPAdapter, MultiServerMCPClient } from "./client.js";
 
+export { finishAuth } from "./oauth.js";
+
 export { MCPClientError } from "./utils/errors.js";
 
 export type {

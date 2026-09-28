@@ -6,8 +6,6 @@ import {
 } from "./utils/errors.js";
 import { z } from "zod";
 import {
-  IssuerMismatchError,
-  OAuthError,
   SSEClientTransport,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
@@ -24,11 +22,6 @@ import { _resolveAndApplyOverrideHandlingOverrides } from "./content.js";
 import { ConnectionManager, type Client } from "./connection.js";
 import { mergeHeaders } from "./utils/misc.js";
 import {
-  assertCallbackState,
-  discoveryStateHint,
-  knownCallbackErrorCode,
-} from "./utils/oauth.js";
-import {
   type ClientConfig,
   type MCPAdapterConfig,
   type Connection,
@@ -42,7 +35,6 @@ import {
   type MCPResourceTemplate,
   type MCPResourceContent,
   type ConnectionErrorHandler,
-  type FinishAuthOptions,
   mcpAdapterConfigSchema,
   toolDiscoveryOptionsSchema,
   type ToolDiscoveryOptions,
@@ -50,9 +42,6 @@ import {
   loggingLevelSchema,
   SSEConnectionSchema,
   customHTTPTransportOptionsSchema,
-  callbackParamsSchema,
-  finishAuthOptionsSchema,
-  oAuthClientProviderSchema,
   type LoadMcpToolsOptions,
 } from "./types.js";
 
@@ -423,108 +412,6 @@ export class MCPAdapter {
     return this.#clientConnections.get(
       this.#transportOptions(serverName, parsedOptions)
     );
-  }
-
-  /**
-   * Complete an OAuth authorization-code redirect for an HTTP or SSE server.
-   *
-   * Pass the callback URL's query (`new URL(callbackUrl).searchParams`). The
-   * SDK validates `iss` (RFC 9207) before redeeming the code and saves tokens
-   * through the provider. Nothing connects here and no state is kept between
-   * the redirect and this call, so the callback may arrive in another request
-   * or process; the next discovery or tool call connects.
-   *
-   * @throws {MCPClientError} for an unknown or stdio server, a provider that is
-   * not an `OAuthClientProvider`, a `state` mismatch, an `error=` callback, or
-   * a failed exchange (the SDK error is the `cause`; it may carry callback
-   * text, so don't display it).
-   */
-  async finishAuth(
-    serverName: string,
-    callbackParams: URLSearchParams,
-    options?: FinishAuthOptions
-  ): Promise<void> {
-    const params = callbackParamsSchema.parse(callbackParams);
-    const { authProvider, expectedState } = finishAuthOptionsSchema.parse(
-      options ?? {}
-    );
-    const connection = this.#config.servers[serverName];
-
-    if (!connection)
-      throw new MCPClientError(
-        `MCP server "${serverName}" is not configured`,
-        serverName
-      );
-
-    if (connection.transport === "stdio")
-      throw new MCPClientError(
-        `OAuth applies to HTTP and SSE servers, but "${serverName}" uses stdio`,
-        serverName
-      );
-
-    const provider = oAuthClientProviderSchema.safeParse(
-      authProvider ?? connection.authProvider
-    );
-
-    if (!provider.success)
-      throw new MCPClientError(
-        `finishAuth requires an OAuthClientProvider for "${serverName}"`,
-        serverName
-      );
-
-    if (expectedState !== undefined)
-      assertCallbackState(params, expectedState, serverName);
-
-    try {
-      await this.#clientConnections.finishAuth(
-        {
-          ...connection,
-          ...this.#transportOptions(serverName, {
-            authProvider: provider.data,
-          }),
-        },
-        params
-      );
-    } catch (error) {
-      // On the "authorization_response" kind (RFC 9207) the error carries the
-      // callback's `iss`, which an attacker controls in a mix-up, as they do the
-      // callback's error fields; the SDK says not to display them. The
-      // "metadata" kind (RFC 8414 §3.3) means the authorization server's
-      // metadata names a different issuer than the URL it was fetched from.
-      // Each kind gets its own fixed message, and neither echoes a received value.
-      if (IssuerMismatchError.isInstance(error)) {
-        if (error.kind === "authorization_response")
-          throw new MCPClientError(
-            `OAuth authorization for "${serverName}" failed: the callback's issuer does not match the authorization server (RFC 9207), so the code was not redeemed.`,
-            serverName,
-            { cause: error }
-          );
-
-        throw new MCPClientError(
-          `OAuth authorization for "${serverName}" failed: the authorization server's metadata issuer does not match the URL it was fetched from (RFC 8414).`,
-          serverName,
-          { cause: error }
-        );
-      }
-
-      // With no `code`, the SDK builds this OAuthError from the callback's own
-      // error fields once `iss` passes (unchecked when the server doesn't
-      // advertise RFC 9207). Echo only a standard `error` code.
-      if (!params.get("code") && OAuthError.isInstance(error)) {
-        const code = knownCallbackErrorCode(params);
-        throw new MCPClientError(
-          `OAuth authorization for "${serverName}" failed: the callback reported ${code ? `"${code}"` : "an error"}, so no code was redeemed.`,
-          serverName,
-          { cause: error }
-        );
-      }
-
-      throw new MCPClientError(
-        `OAuth authorization for "${serverName}" failed: ${error}.${discoveryStateHint(provider.data)}`,
-        serverName,
-        { cause: error }
-      );
-    }
   }
 
   /**
