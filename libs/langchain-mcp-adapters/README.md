@@ -124,7 +124,11 @@ for argument and result hooks.
   call just saved, logging the user out.
 
 Once a provider has a token it replaces a configured `Authorization` header;
-until then the header is sent.
+until then the header is sent. The SDK also forwards a configured static
+`Authorization` header to the authorization server's discovery, registration
+and token endpoints, not only to the MCP server, so don't pair a secret API
+key with an OAuth provider whose authorization server lives on another
+origin.
 
 ## Examples
 
