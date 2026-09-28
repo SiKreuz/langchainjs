@@ -107,8 +107,12 @@ for argument and result hooks.
 - An `OAuthClientProvider` for OAuth. The SDK handles discovery, registration,
   exchange and refresh; your application owns storage, redirects and the
   callback. Implement `invalidateCredentials()` so a refresh the server
-  rejects restarts the login instead of failing. When a connection needs a
-  login, the thrown `MCPClientError` has an `UnauthorizedError` as its
+  rejects restarts the login instead of failing. Implement
+  `saveDiscoveryState()` / `discoveryState()` too, persisted alongside the
+  code verifier: it's required when the authorization server is only
+  discoverable from the 401 challenge, and it silences the SDK's warning
+  otherwise. When a connection needs a login, the thrown `MCPClientError`
+  has an `UnauthorizedError` as its
   `cause`. After the redirect, call
   `adapter.finishAuth(serverName, new URL(callbackUrl).searchParams, { expectedState })`
   and connect again. Don't start another discovery while a login is pending:
