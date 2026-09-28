@@ -486,14 +486,24 @@ export class MCPAdapter {
     } catch (error) {
       // The SDK's IssuerMismatchError carries the callback's raw `iss` value
       // (and other error/error_description/error_uri fields from the same
-      // callback are equally attacker-controlled); its own docstring says
-      // callers must not display it. Use a fixed message instead.
-      if (IssuerMismatchError.isInstance(error))
+      // callback are equally attacker-controlled) only on the
+      // "authorization_response" kind; its own docstring says callers must
+      // not display that value. The "metadata" kind compares two URLs the
+      // adapter already trusts, so it gets its own fixed message.
+      if (IssuerMismatchError.isInstance(error)) {
+        if (error.kind === "authorization_response")
+          throw new MCPClientError(
+            `OAuth authorization for "${serverName}" failed: the callback's issuer does not match the authorization server (RFC 9207), so the code was not redeemed.`,
+            serverName,
+            { cause: error }
+          );
+
         throw new MCPClientError(
-          `OAuth authorization for "${serverName}" failed: the callback's issuer does not match the authorization server (RFC 9207), so the code was not redeemed.`,
+          `OAuth authorization for "${serverName}" failed: the authorization server's metadata issuer does not match the URL it was fetched from (RFC 8414).`,
           serverName,
           { cause: error }
         );
+      }
 
       // With no `code`, the SDK builds this OAuthError from the callback's own
       // error fields once `iss` passes (unchecked when the server doesn't

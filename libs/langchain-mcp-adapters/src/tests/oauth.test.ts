@@ -11,6 +11,7 @@ import {
   UnauthorizedError,
   type MCPAdapterConfig,
 } from "../index.js";
+import { ConnectionManager } from "../connection.js";
 import { getHttpErrorCode, isAuthenticationError } from "../utils/errors.js";
 import {
   startOAuthFixture,
@@ -458,6 +459,32 @@ describe("finishAuth", () => {
     expect(error.message).not.toContain("attacker.invalid");
     expect(server.stats.exchanges).toBe(0);
     expect(provider.stored.tokens).toBeUndefined();
+  });
+
+  it("gives an authorization-server metadata mismatch its own message", async () => {
+    // The "metadata" kind compares two URLs the adapter already trusts, not
+    // callback-controlled text, so it must not reuse the callback-specific
+    // fixed message. Synthesized via a spy: the fixture's own metadata never
+    // disagrees with the URL it was fetched from.
+    const { mcp, callback } = await pendingLogin();
+    const mismatch = new IssuerMismatchError(
+      "metadata",
+      "https://as.example",
+      "https://mismatched.example"
+    );
+    const spy = vi
+      .spyOn(ConnectionManager.prototype, "finishAuth")
+      .mockRejectedValueOnce(mismatch);
+    try {
+      const error = await failure(mcp.finishAuth("svc", callback));
+      expect(error.cause).toBe(mismatch);
+      expect(error.message).toContain(
+        "the authorization server's metadata issuer does not match the URL it was fetched from (RFC 8414)"
+      );
+      expect(error.message).not.toContain("callback's issuer");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("rejects a callback without iss when the server advertises it", async () => {
