@@ -486,12 +486,12 @@ export class MCPAdapter {
         params
       );
     } catch (error) {
-      // The SDK's IssuerMismatchError carries the callback's raw `iss` value
-      // (and other error/error_description/error_uri fields from the same
-      // callback are equally attacker-controlled) only on the
-      // "authorization_response" kind; its own docstring says callers must
-      // not display that value. The "metadata" kind compares two URLs the
-      // adapter already trusts, so it gets its own fixed message.
+      // On the "authorization_response" kind (RFC 9207) the error carries the
+      // callback's `iss`, which an attacker controls in a mix-up, as they do the
+      // callback's error fields; the SDK says not to display them. The
+      // "metadata" kind (RFC 8414 §3.3) means the authorization server's
+      // metadata names a different issuer than the URL it was fetched from.
+      // Each kind gets its own fixed message, and neither echoes a received value.
       if (IssuerMismatchError.isInstance(error)) {
         if (error.kind === "authorization_response")
           throw new MCPClientError(

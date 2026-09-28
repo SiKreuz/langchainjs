@@ -99,21 +99,20 @@ for argument and result hooks.
 `authProvider` takes either SDK provider shape:
 
 - `{ token, onUnauthorized? }` (`AuthProvider`) for tokens your application
-  manages. `token()` runs before every request; `onUnauthorized()` runs once
-  on a 401 before the request is retried. A connection failure's cause is the
-  SDK's `UnauthorizedError` when a login is needed, or an HTTP 401 error
-  (`SdkHttpError`) when credentials are still rejected after `onUnauthorized`
-  or a refresh.
+  manages. `token()` runs before every request; `onUnauthorized()` runs on a
+  401 before the request is retried. Over SSE the SDK calls it again every
+  time the reconnect is rejected, so throw from it when you have no newer
+  token.
 - An `OAuthClientProvider` for OAuth. The SDK handles discovery, registration,
   exchange and refresh; your application owns storage, redirects and the
   callback. Implement `invalidateCredentials()` so a refresh the server
   rejects restarts the login instead of failing. Implement
   `saveDiscoveryState()` / `discoveryState()` too, persisted alongside the
   code verifier: it's required when the authorization server is only
-  discoverable from the 401 challenge, and it silences the SDK's warning
-  otherwise. When a connection needs a login, the thrown `MCPClientError`
-  has an `UnauthorizedError` as its
-  `cause`. After the redirect, call
+  discoverable from the 401 challenge, and it lets the SDK check that the
+  callback comes from the authorization server the login started with. When
+  a connection needs a login, the SDK calls `redirectToAuthorization()`.
+  After the redirect, call
   `adapter.finishAuth(serverName, new URL(callbackUrl).searchParams, { expectedState })`
   and connect again. Don't start another discovery while a login is pending:
   it begins a new redirect and invalidates the first callback. Make the
@@ -122,6 +121,12 @@ for argument and result hooks.
   a refresh, a double-invoked handler, or a back-button replay redeems the
   same code twice, and the SDK responds by discarding the tokens the first
   call just saved, logging the user out.
+
+A connection rejected for credentials throws an `MCPClientError`. Its `cause`
+is the SDK's `UnauthorizedError` when the SDK can't recover on its own (an
+OAuth login is needed, or a token provider has no `onUnauthorized`), or an
+HTTP 401 error (`SdkHttpError`, `status: 401`) when the retry after
+`onUnauthorized` or a token refresh is still rejected.
 
 Once a provider has a token it replaces a configured `Authorization` header;
 until then the header is sent. The SDK also forwards a configured static
