@@ -1513,8 +1513,6 @@ describe("MultiServerMCPClient", () => {
       expect(SSEClientTransport).toHaveBeenCalledWith(
         new URL(config["test-server"].url),
         expect.objectContaining({
-          // Merged headers carry `Headers`' lower-case names; the SDK compares
-          // names case-insensitively, so the spelling no longer matters.
           requestInit: { headers: { authorization: "Bearer token" } },
         })
       );
@@ -2196,6 +2194,20 @@ describe("MultiServerMCPClient", () => {
       // Should not have created a client
       expect(Client).not.toHaveBeenCalled();
     });
+  });
+
+  test("explains that useStandardContentBlocks was removed", () => {
+    expect(
+      () =>
+        new MCPAdapter({
+          servers: {
+            svc: { transport: "http", url: "http://localhost:8000/mcp" },
+          },
+          useStandardContentBlocks: true,
+        } as never)
+    ).toThrow(
+      /useStandardContentBlocks was removed: tool content is always standard LangChain content blocks/
+    );
   });
 });
 
