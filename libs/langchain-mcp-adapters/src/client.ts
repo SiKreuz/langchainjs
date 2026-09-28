@@ -479,7 +479,9 @@ export class MCPAdapter {
       await this.#clientConnections.finishAuth(
         {
           ...connection,
-          ...this.#transportOptions(serverName, { authProvider: provider.data }),
+          ...this.#transportOptions(serverName, {
+            authProvider: provider.data,
+          }),
         },
         params
       );
