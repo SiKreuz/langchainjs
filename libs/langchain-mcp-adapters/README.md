@@ -113,8 +113,10 @@ for argument and result hooks.
   callback comes from the authorization server the login started with. When
   a connection needs a login, the SDK calls `redirectToAuthorization()`.
   After the redirect, call
-  `adapter.finishAuth(serverName, new URL(callbackUrl).searchParams, { expectedState })`
-  and connect again. Don't start another discovery while a login is pending:
+  `finishAuth(server, new URL(callbackUrl).searchParams, { expectedState })`
+  with the same connection config you put under `servers.<name>`, and connect
+  again. The callback route doesn't need an `MCPAdapter`, just that config.
+  Don't start another discovery while a login is pending:
   it begins a new redirect and invalidates the first callback. Make the
   callback single-use: look up and delete the pending `state` before calling
   `finishAuth`, and don't call it for a `state` that's already gone. Otherwise
