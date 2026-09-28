@@ -455,6 +455,9 @@ describe("finishAuth", () => {
     callback.set("error_description", "attacker-text");
     const error = await failure(mcp.finishAuth("svc", callback));
     expect(error.cause).toBeInstanceOf(IssuerMismatchError);
+    expect(error.message).toContain(
+      "the callback's issuer does not match the authorization server (RFC 9207)"
+    );
     expect(error.message).not.toContain("attacker-text");
     expect(error.message).not.toContain("attacker.invalid");
     expect(server.stats.exchanges).toBe(0);
@@ -462,10 +465,9 @@ describe("finishAuth", () => {
   });
 
   it("gives an authorization-server metadata mismatch its own message", async () => {
-    // The "metadata" kind compares two URLs the adapter already trusts, not
-    // callback-controlled text, so it must not reuse the callback-specific
-    // fixed message. Synthesized via a spy: the fixture's own metadata never
-    // disagrees with the URL it was fetched from.
+    // A "metadata" mismatch concerns the authorization server's own metadata
+    // document, not the callback, so it must not reuse the callback message.
+    // Synthesized via a spy: the fixture's metadata always matches its URL.
     const { mcp, callback } = await pendingLogin();
     const mismatch = new IssuerMismatchError(
       "metadata",
@@ -492,6 +494,9 @@ describe("finishAuth", () => {
     expect(callback.has("iss")).toBe(false);
     const error = await failure(mcp.finishAuth("svc", callback));
     expect(error.cause).toBeInstanceOf(IssuerMismatchError);
+    expect(error.message).toContain(
+      "the callback's issuer does not match the authorization server (RFC 9207)"
+    );
     expect(server.stats.exchanges).toBe(0);
   });
 
@@ -819,6 +824,8 @@ describe("OAuth behavior on SDK 2.1", () => {
     });
     await failure(mcp.listTools());
 
+    // Visible only because the SDK forwards configured headers to the
+    // authorization server too; if that stops, the recorded set empties.
     const before = server.requests.length;
     await mcp.finishAuth(
       "svc",
@@ -866,7 +873,7 @@ describe("OAuth behavior on SDK 2.1", () => {
 
   // The SDK's auth() treats invalid_grant on the code leg the same as a
   // rejected refresh and invalidates stored tokens, so a replayed callback
-  // logs the user out right after a successful login (I1). Applications must
+  // logs the user out right after a successful login. Applications must
   // make the callback single-use themselves; see the README.
   it("characterization: replaying a used callback rejects and discards the stored tokens", async () => {
     const { provider, mcp, callback } = await pendingLogin();
@@ -879,5 +886,29 @@ describe("OAuth behavior on SDK 2.1", () => {
     const redirectsBefore = provider.redirects.length;
     await failure(mcp.listTools());
     expect(provider.redirects).toHaveLength(redirectsBefore + 1);
+  });
+
+  // SSE's connect path retries after every onUnauthorized with no cap, so only
+  // a throwing handler ends it; the README tells token providers to throw.
+  it("characterization: over SSE, onUnauthorized runs on every rejected reconnect", async () => {
+    const server = await fixture();
+    let calls = 0;
+    const mcp = adapter({
+      servers: {
+        svc: {
+          transport: "sse",
+          url: server.sseUrl,
+          authProvider: {
+            token: async () => "bad",
+            onUnauthorized: async () => {
+              calls += 1;
+              if (calls === 3) throw new Error("no newer token");
+            },
+          },
+        },
+      },
+    });
+    await failure(mcp.listTools());
+    expect(calls).toBe(3);
   });
 });

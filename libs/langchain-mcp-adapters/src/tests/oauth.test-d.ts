@@ -47,7 +47,9 @@ test("finishAuth rejects a non-URLSearchParams callback and a token-only authPro
   // @ts-expect-error a token-only AuthProvider is not an OAuthClientProvider.
   const bad: FinishAuthOptions["authProvider"] = { token: async () => "x" };
   mcp.finishAuth("a", new URLSearchParams(), { authProvider: bad });
-  expectTypeOf(bad).toEqualTypeOf<FinishAuthOptions["authProvider"]>();
+  expectTypeOf<AuthProvider>().not.toExtend<
+    NonNullable<FinishAuthOptions["authProvider"]>
+  >();
 });
 
 test("UnauthorizedError is the exported auth check", () => {
