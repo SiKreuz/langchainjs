@@ -321,7 +321,7 @@ const httpOptionsSchema = z
      * - an `AuthProvider` (`{ token, onUnauthorized? }`) for tokens the
      *   application manages;
      * - an `OAuthClientProvider` for OAuth; finish a browser redirect with
-     *   `MCPAdapter#finishAuth`.
+     *   the exported `finishAuth`.
      * Once the provider has a token it replaces a configured `Authorization`
      * header; until then the header is sent (SDK >= 2.1.0).
      */
