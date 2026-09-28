@@ -9,7 +9,10 @@ import {
   MCPAdapter,
   MCPClientError,
   UnauthorizedError,
+  finishAuth,
   type MCPAdapterConfig,
+  type SSEConnection,
+  type StreamableHTTPConnection,
 } from "../index.js";
 import { ConnectionManager } from "../connection.js";
 import { getHttpErrorCode, isAuthenticationError } from "../utils/errors.js";
@@ -410,50 +413,55 @@ async function pendingLogin(
     persistDiscovery: options.persistDiscovery,
   });
   const transport = options.transport ?? "http";
-  const mcp = adapter({
-    servers: {
-      // A widened `transport` variable does not narrow the discriminated
-      // union below, so each branch is written with its literal directly.
-      svc:
-        transport === "sse"
-          ? { transport: "sse", url: server.sseUrl, authProvider: provider }
-          : { transport: "http", url: server.mcpUrl, authProvider: provider },
-    },
-  });
+  // A widened `transport` variable does not narrow the discriminated
+  // union below, so each branch is written with its literal directly.
+  const serverConfig =
+    transport === "sse"
+      ? ({
+          transport: "sse",
+          url: server.sseUrl,
+          authProvider: provider,
+        } satisfies SSEConnection)
+      : ({
+          transport: "http",
+          url: server.mcpUrl,
+          authProvider: provider,
+        } satisfies StreamableHTTPConnection);
+  const mcp = adapter({ servers: { svc: serverConfig } });
   const error = await failure(mcp.listTools());
   expect(error.cause).toBeInstanceOf(UnauthorizedError);
   expect(provider.redirects).toHaveLength(1);
   const callback = await authorizeInBrowser(provider.redirects[0]);
-  return { server, provider, mcp, callback };
+  return { server, provider, mcp, serverConfig, callback };
 }
 
 describe("finishAuth", () => {
   it.each([false, true])(
     "completes a redirect login (persisted discovery: %s)",
     async (persistDiscovery) => {
-      const { server, mcp, callback } = await pendingLogin({
+      const { server, mcp, serverConfig, callback } = await pendingLogin({
         persistDiscovery,
       });
-      await mcp.finishAuth("svc", callback);
+      await finishAuth(serverConfig, callback);
       expect(hasWhoami(await mcp.listTools())).toBe(true);
       expect(server.stats.exchanges).toBe(1);
     }
   );
 
   it("completes the exchange for an SSE server", async () => {
-    const { server, provider, mcp, callback } = await pendingLogin({
+    const { server, provider, serverConfig, callback } = await pendingLogin({
       transport: "sse",
     });
-    await mcp.finishAuth("svc", callback);
+    await finishAuth(serverConfig, callback);
     expect(provider.stored.tokens?.access_token).toBeDefined();
     expect(server.stats.exchanges).toBe(1);
   });
 
   it("rejects a tampered iss before redeeming the code, without echoing callback text", async () => {
-    const { server, provider, mcp, callback } = await pendingLogin();
+    const { server, provider, serverConfig, callback } = await pendingLogin();
     callback.set("iss", "http://attacker.invalid/");
     callback.set("error_description", "attacker-text");
-    const error = await failure(mcp.finishAuth("svc", callback));
+    const error = await failure(finishAuth(serverConfig, callback));
     expect(error.cause).toBeInstanceOf(IssuerMismatchError);
     expect(error.message).toContain(
       "the callback's issuer does not match the authorization server (RFC 9207)"
@@ -468,7 +476,7 @@ describe("finishAuth", () => {
     // A "metadata" mismatch concerns the authorization server's own metadata
     // document, not the callback, so it must not reuse the callback message.
     // Synthesized via a spy: the fixture's metadata always matches its URL.
-    const { mcp, callback } = await pendingLogin();
+    const { serverConfig, callback } = await pendingLogin();
     const mismatch = new IssuerMismatchError(
       "metadata",
       "https://as.example",
@@ -478,7 +486,7 @@ describe("finishAuth", () => {
       .spyOn(ConnectionManager.prototype, "finishAuth")
       .mockRejectedValueOnce(mismatch);
     try {
-      const error = await failure(mcp.finishAuth("svc", callback));
+      const error = await failure(finishAuth(serverConfig, callback));
       expect(error.cause).toBe(mismatch);
       expect(error.message).toContain(
         "the authorization server's metadata issuer does not match the URL it was fetched from (RFC 8414)"
@@ -490,9 +498,11 @@ describe("finishAuth", () => {
   });
 
   it("rejects a callback without iss when the server advertises it", async () => {
-    const { server, mcp, callback } = await pendingLogin({ iss: "omitted" });
+    const { server, serverConfig, callback } = await pendingLogin({
+      iss: "omitted",
+    });
     expect(callback.has("iss")).toBe(false);
-    const error = await failure(mcp.finishAuth("svc", callback));
+    const error = await failure(finishAuth(serverConfig, callback));
     expect(error.cause).toBeInstanceOf(IssuerMismatchError);
     expect(error.message).toContain(
       "the callback's issuer does not match the authorization server (RFC 9207)"
@@ -501,34 +511,34 @@ describe("finishAuth", () => {
   });
 
   it("accepts a callback without iss when the server does not send it", async () => {
-    const { server, mcp, callback } = await pendingLogin({
+    const { server, serverConfig, callback } = await pendingLogin({
       iss: "unsupported",
     });
-    await mcp.finishAuth("svc", callback);
+    await finishAuth(serverConfig, callback);
     expect(server.stats.exchanges).toBe(1);
   });
 
   it("surfaces an error= callback as OAuthError", async () => {
-    const { mcp, callback } = await pendingLogin();
+    const { serverConfig, callback } = await pendingLogin();
     const denied = new URLSearchParams({
       error: "access_denied",
       error_description: "user declined",
       iss: callback.get("iss") ?? "",
     });
-    const error = await failure(mcp.finishAuth("svc", denied));
+    const error = await failure(finishAuth(serverConfig, denied));
     expect(error.cause).toBeInstanceOf(OAuthError);
     expect(error.message).toContain("access_denied");
     expect(error.message).not.toContain("user declined");
   });
 
   it("drops error_description/error_uri from an access_denied callback when the server doesn't support iss", async () => {
-    const { mcp } = await pendingLogin({ iss: "unsupported" });
+    const { serverConfig } = await pendingLogin({ iss: "unsupported" });
     const denied = new URLSearchParams({
       error: "access_denied",
       error_description: "you were phished by attacker.invalid",
       error_uri: "https://distinct-uri-marker.example/explain",
     });
-    const error = await failure(mcp.finishAuth("svc", denied));
+    const error = await failure(finishAuth(serverConfig, denied));
     expect(error.cause).toBeInstanceOf(OAuthError);
     expect(error.message).toContain("access_denied");
     expect(error.message).not.toContain("attacker.invalid");
@@ -537,35 +547,31 @@ describe("finishAuth", () => {
   });
 
   it("does not echo a non-allowlisted error code", async () => {
-    const { mcp } = await pendingLogin({ iss: "unsupported" });
+    const { serverConfig } = await pendingLogin({ iss: "unsupported" });
     const code = "evil<script>alert(1)</script>";
     const denied = new URLSearchParams({ error: code });
-    const error = await failure(mcp.finishAuth("svc", denied));
+    const error = await failure(finishAuth(serverConfig, denied));
     expect(error.cause).toBeInstanceOf(OAuthError);
     expect(error.message).not.toContain(code);
   });
 
   it("does not treat a CRLF-suffixed near-miss as the standard code", async () => {
-    const { mcp } = await pendingLogin({ iss: "unsupported" });
+    const { serverConfig } = await pendingLogin({ iss: "unsupported" });
     const denied = new URLSearchParams({ error: "access_denied\r\nX: y" });
-    const error = await failure(mcp.finishAuth("svc", denied));
+    const error = await failure(finishAuth(serverConfig, denied));
     expect(error.cause).toBeInstanceOf(OAuthError);
     expect(error.message).toContain("an error");
     expect(error.message).not.toContain("access_denied");
   });
 
   it("keeps an unverifiable error= callback on the generic path", async () => {
-    const mcp = adapter({
-      servers: {
-        svc: {
-          transport: "http",
-          url: "http://127.0.0.1:9/mcp",
-          authProvider: createTestOAuthProvider(),
-        },
-      },
-    });
+    const serverConfig = {
+      transport: "http",
+      url: "http://127.0.0.1:9/mcp",
+      authProvider: createTestOAuthProvider(),
+    } satisfies StreamableHTTPConnection;
     const error = await failure(
-      mcp.finishAuth("svc", new URLSearchParams({ error: "access_denied" }))
+      finishAuth(serverConfig, new URLSearchParams({ error: "access_denied" }))
     );
     expect(error.cause).toBeInstanceOf(UnauthorizedError);
     expect(error.message).not.toContain("access_denied");
@@ -573,67 +579,52 @@ describe("finishAuth", () => {
   });
 
   it("reports a failed exchange when the callback carries both code and error", async () => {
-    const { mcp, callback } = await pendingLogin();
+    const { serverConfig, callback } = await pendingLogin();
     callback.set("code", "bogus");
     callback.set("error", "access_denied");
-    const error = await failure(mcp.finishAuth("svc", callback));
+    const error = await failure(finishAuth(serverConfig, callback));
     expect(error.cause).toBeInstanceOf(OAuthError);
     expect(error.message).not.toContain("access_denied");
     expect(error.message).toContain("saveDiscoveryState");
   });
 
-  it("rejects an unknown server, a stdio server, and a token-only provider", async () => {
+  it("rejects a stdio server and a token-only provider", async () => {
     const server = await fixture();
-    const mcp = adapter({
-      servers: {
-        local: { transport: "stdio", command: "node", args: ["-e", ""] },
-        token: {
+    const params = new URLSearchParams({ code: "c" });
+    const stdioError = await failure(
+      finishAuth(
+        { transport: "stdio", command: "node", args: ["-e", ""] } as never,
+        params
+      )
+    );
+    expect(stdioError.message).toMatch(
+      /^OAuth applies to HTTP and SSE servers, but this configuration uses stdio/
+    );
+
+    // Anchored: the SDK's own message also names OAuthClientProvider.
+    const tokenError = await failure(
+      finishAuth(
+        {
           transport: "http",
           url: server.mcpUrl,
           authProvider: { token: async () => "t" },
         },
-      },
-    });
-    const params = new URLSearchParams({ code: "c" });
-    expect((await failure(mcp.finishAuth("missing", params))).message).toMatch(
-      /^MCP server "missing" is not configured/
+        params
+      )
     );
-    expect((await failure(mcp.finishAuth("local", params))).message).toMatch(
-      /^OAuth applies to HTTP and SSE servers, but "local" uses stdio/
-    );
-    // Anchored: the SDK's own message also names OAuthClientProvider.
-    expect((await failure(mcp.finishAuth("token", params))).message).toMatch(
+    expect(tokenError.message).toMatch(
       /^finishAuth requires an OAuthClientProvider/
     );
   });
 
-  it("uses a per-call provider override", async () => {
-    const server = await fixture();
-    const provider = createTestOAuthProvider();
-    const mcp = adapter({
-      servers: {
-        svc: {
-          transport: "http",
-          url: server.mcpUrl,
-          authProvider: { token: async () => "not-valid" },
-        },
-      },
-    });
-    await failure(mcp.listToolsets({ authProvider: provider }));
-    const callback = await authorizeInBrowser(provider.redirects[0]);
-    await mcp.finishAuth("svc", callback, { authProvider: provider });
-    const toolsets = await mcp.listToolsets({ authProvider: provider });
-    expect(hasWhoami(toolsets.svc)).toBe(true);
-  });
-
   it("sends no MCP request and closes the transport it creates", async () => {
-    const { server, mcp, callback } = await pendingLogin();
+    const { server, serverConfig, callback } = await pendingLogin();
     const before = server.requests.filter(
       (request) => request.path === "/mcp"
     ).length;
     const close = vi.spyOn(StreamableHTTPClientTransport.prototype, "close");
     try {
-      await mcp.finishAuth("svc", callback);
+      await finishAuth(serverConfig, callback);
       expect(close).toHaveBeenCalledTimes(1);
     } finally {
       close.mockRestore();
@@ -644,17 +635,22 @@ describe("finishAuth", () => {
   });
 
   it("requires URLSearchParams", async () => {
-    const { mcp, callback } = await pendingLogin();
+    const { serverConfig, callback } = await pendingLogin();
     await expect(
-      mcp.finishAuth("svc", `http://127.0.0.1:9/callback?${callback}` as never)
+      finishAuth(
+        serverConfig,
+        `http://127.0.0.1:9/callback?${callback}` as never
+      )
     ).rejects.toThrow(/URLSearchParams/);
   });
 
   describe("expectedState", () => {
     it("accepts the matching state", async () => {
-      const { server, mcp, callback } = await pendingLogin({ state: "s-1" });
+      const { server, serverConfig, callback } = await pendingLogin({
+        state: "s-1",
+      });
       expect(callback.get("state")).toBe("s-1");
-      await mcp.finishAuth("svc", callback, { expectedState: "s-1" });
+      await finishAuth(serverConfig, callback, { expectedState: "s-1" });
       expect(server.stats.exchanges).toBe(1);
     });
 
@@ -665,10 +661,12 @@ describe("finishAuth", () => {
     ])(
       "rejects a %s state before redeeming the code",
       async (_label, mutate) => {
-        const { server, mcp, callback } = await pendingLogin({ state: "s-1" });
+        const { server, serverConfig, callback } = await pendingLogin({
+          state: "s-1",
+        });
         mutate(callback);
         const error = await failure(
-          mcp.finishAuth("svc", callback, { expectedState: "s-1" })
+          finishAuth(serverConfig, callback, { expectedState: "s-1" })
         );
         expect(error.message).toMatch(/state/);
         expect(server.stats.exchanges).toBe(0);
@@ -676,16 +674,20 @@ describe("finishAuth", () => {
     );
 
     it("defers to the SDK when omitted", async () => {
-      const { server, mcp, callback } = await pendingLogin({ state: "s-1" });
+      const { server, serverConfig, callback } = await pendingLogin({
+        state: "s-1",
+      });
       callback.set("state", "tampered");
-      await mcp.finishAuth("svc", callback);
+      await finishAuth(serverConfig, callback);
       expect(server.stats.exchanges).toBe(1);
     });
 
     it("rejects an empty expectedState up front", async () => {
-      const { server, mcp, callback } = await pendingLogin({ state: "s-1" });
+      const { server, serverConfig, callback } = await pendingLogin({
+        state: "s-1",
+      });
       await expect(
-        mcp.finishAuth("svc", callback, { expectedState: "" })
+        finishAuth(serverConfig, callback, { expectedState: "" })
       ).rejects.toThrow(/expectedState/);
       expect(server.stats.exchanges).toBe(0);
     });
@@ -697,9 +699,11 @@ describe("finishAuth", () => {
   ])(
     "hints at discovery state when a callback fails (persisted: %s)",
     async (persistDiscovery, hinted) => {
-      const { mcp, callback } = await pendingLogin({ persistDiscovery });
+      const { serverConfig, callback } = await pendingLogin({
+        persistDiscovery,
+      });
       callback.set("code", "bogus");
-      const error = await failure(mcp.finishAuth("svc", callback));
+      const error = await failure(finishAuth(serverConfig, callback));
       expect(error.cause).toBeDefined();
       expect(error.message.includes("saveDiscoveryState")).toBe(hinted);
     }
@@ -710,19 +714,16 @@ describe("OAuth behavior on SDK 2.1", () => {
   it("lets the provider's token win over a stale configured Authorization after login", async () => {
     const server = await fixture();
     const provider = createTestOAuthProvider();
-    const mcp = adapter({
-      servers: {
-        svc: {
-          transport: "http",
-          url: server.mcpUrl,
-          headers: { Authorization: "Bearer stale" },
-          authProvider: provider,
-        },
-      },
-    });
+    const serverConfig = {
+      transport: "http",
+      url: server.mcpUrl,
+      headers: { Authorization: "Bearer stale" },
+      authProvider: provider,
+    } satisfies StreamableHTTPConnection;
+    const mcp = adapter({ servers: { svc: serverConfig } });
     await failure(mcp.listTools());
-    await mcp.finishAuth(
-      "svc",
+    await finishAuth(
+      serverConfig,
       await authorizeInBrowser(provider.redirects[0])
     );
 
@@ -755,8 +756,9 @@ describe("OAuth behavior on SDK 2.1", () => {
   });
 
   it("refreshes an expired access token without a new redirect", async () => {
-    const { server, provider, mcp, callback } = await pendingLogin();
-    await mcp.finishAuth("svc", callback);
+    const { server, provider, mcp, serverConfig, callback } =
+      await pendingLogin();
+    await finishAuth(serverConfig, callback);
     const [tool] = (await mcp.listTools()).filter((t) =>
       t.name.endsWith("whoami")
     );
@@ -812,23 +814,20 @@ describe("OAuth behavior on SDK 2.1", () => {
   it("keeps the last spelling on the finishAuth leg too", async () => {
     const server = await fixture();
     const provider = createTestOAuthProvider();
-    const mcp = adapter({
-      servers: {
-        svc: {
-          transport: "http",
-          url: server.mcpUrl,
-          headers: { authorization: "Bearer a", Authorization: "Bearer b" },
-          authProvider: provider,
-        },
-      },
-    });
+    const serverConfig = {
+      transport: "http",
+      url: server.mcpUrl,
+      headers: { authorization: "Bearer a", Authorization: "Bearer b" },
+      authProvider: provider,
+    } satisfies StreamableHTTPConnection;
+    const mcp = adapter({ servers: { svc: serverConfig } });
     await failure(mcp.listTools());
 
     // Visible only because the SDK forwards configured headers to the
     // authorization server too; if that stops, the recorded set empties.
     const before = server.requests.length;
-    await mcp.finishAuth(
-      "svc",
+    await finishAuth(
+      serverConfig,
       await authorizeInBrowser(provider.redirects[0])
     );
     const finishAuthSpellings = new Set(
@@ -843,8 +842,9 @@ describe("OAuth behavior on SDK 2.1", () => {
   // Upstream #2510: the SDK cannot complete a mid-session redirect itself. A
   // stateless finishAuth lets the live connection pick up the new tokens.
   it("characterization: a login that lapses mid-session completes through finishAuth", async () => {
-    const { server, provider, mcp, callback } = await pendingLogin();
-    await mcp.finishAuth("svc", callback);
+    const { server, provider, mcp, serverConfig, callback } =
+      await pendingLogin();
+    await finishAuth(serverConfig, callback);
     const [tool] = (await mcp.listTools()).filter((t) =>
       t.name.endsWith("whoami")
     );
@@ -853,8 +853,8 @@ describe("OAuth behavior on SDK 2.1", () => {
     await expect(tool.invoke({})).rejects.toThrow(/UnauthorizedError/);
     expect(provider.redirects).toHaveLength(2);
 
-    await mcp.finishAuth(
-      "svc",
+    await finishAuth(
+      serverConfig,
       await authorizeInBrowser(provider.redirects[1])
     );
     expect(JSON.stringify(await tool.invoke({}))).toContain("authorized");
@@ -863,11 +863,12 @@ describe("OAuth behavior on SDK 2.1", () => {
   // Documented limitation (§4.5): rediscovering while a login is pending
   // starts a second redirect and replaces the PKCE verifier.
   it("characterization: rediscovering during a pending login invalidates the first callback", async () => {
-    const { server, provider, mcp, callback } = await pendingLogin();
+    const { server, provider, mcp, serverConfig, callback } =
+      await pendingLogin();
     await failure(mcp.listTools());
     expect(provider.redirects).toHaveLength(2);
 
-    await failure(mcp.finishAuth("svc", callback));
+    await failure(finishAuth(serverConfig, callback));
     expect(server.stats.exchanges).toBe(0);
   });
 
@@ -876,11 +877,11 @@ describe("OAuth behavior on SDK 2.1", () => {
   // logs the user out right after a successful login. Applications must
   // make the callback single-use themselves; see the README.
   it("characterization: replaying a used callback rejects and discards the stored tokens", async () => {
-    const { provider, mcp, callback } = await pendingLogin();
-    await mcp.finishAuth("svc", callback);
+    const { provider, mcp, serverConfig, callback } = await pendingLogin();
+    await finishAuth(serverConfig, callback);
     expect(provider.stored.tokens).toBeDefined();
 
-    await failure(mcp.finishAuth("svc", callback));
+    await failure(finishAuth(serverConfig, callback));
     expect(provider.stored.tokens).toBeUndefined();
 
     const redirectsBefore = provider.redirects.length;
