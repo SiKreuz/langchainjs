@@ -110,19 +110,29 @@ for argument and result hooks.
   `saveDiscoveryState()` / `discoveryState()` too, persisted alongside the
   code verifier: it's required when the authorization server is only
   discoverable from the 401 challenge, and it lets the SDK check that the
-  callback comes from the authorization server the login started with. When
-  a connection needs a login, the SDK calls `redirectToAuthorization()`.
-  After the redirect, call
-  `finishAuth(server, new URL(callbackUrl).searchParams, { expectedState })`
-  with the same connection config you put under `servers.<name>`, and connect
-  again. The callback route doesn't need an `MCPAdapter`, just that config.
-  Don't start another discovery while a login is pending:
-  it begins a new redirect and invalidates the first callback. Make the
-  callback single-use: look up and delete the pending `state` before calling
-  `finishAuth`, and don't call it for a `state` that's already gone. Otherwise
-  a refresh, a double-invoked handler, or a back-button replay redeems the
-  same code twice, and the SDK responds by discarding the tokens the first
-  call just saved, logging the user out.
+  callback comes from the authorization server the login started with.
+
+When a connection needs a login, the SDK calls `redirectToAuthorization()`.
+After the redirect, complete it with the exported `finishAuth`, using the
+same connection config you put under `servers.<name>`:
+
+```ts
+import { finishAuth } from "@langchain/mcp-adapters";
+
+await finishAuth(server, new URL(callbackUrl).searchParams, { expectedState });
+```
+
+The callback route doesn't need an `MCPAdapter`, just that config. A
+per-user provider (one supplied through a per-call `authProvider` rather
+than the server's own) goes on the server object too —
+`finishAuth({ ...server, authProvider }, ...)` — not as a separate argument.
+Don't start another discovery while a login is pending: it begins a new
+redirect and invalidates the first callback. Make the callback single-use:
+look up and delete the pending `state` before calling `finishAuth`, and
+don't call it for a `state` that's already gone. Otherwise a refresh, a
+double-invoked handler, or a back-button replay redeems the same code
+twice, and the SDK responds by discarding the tokens the first call just
+saved, logging the user out.
 
 A connection rejected for credentials throws an `MCPClientError`. Its `cause`
 is the SDK's `UnauthorizedError` when the SDK can't recover on its own (an
