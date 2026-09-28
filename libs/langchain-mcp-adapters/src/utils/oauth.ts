@@ -18,14 +18,13 @@ function constantTimeEqual(a: string, b: string): boolean {
 export function assertCallbackState(
   params: URLSearchParams,
   expected: string,
-  url: string
+  origin: string
 ): void {
   const states = params.getAll("state");
 
   if (states.length !== 1 || !constantTimeEqual(states[0], expected))
     throw new MCPClientError(
-      `OAuth callback state for ${url} does not match this authorization attempt`,
-      url
+      `OAuth callback state for ${origin} does not match this authorization attempt`
     );
 }
 

@@ -13,8 +13,7 @@ import {
   callbackParamsSchema,
   finishAuthOptionsSchema,
   oAuthClientProviderSchema,
-  type StreamableHTTPConnection,
-  type SSEConnection,
+  type HTTPConnection,
   type FinishAuthOptions,
 } from "./types.js";
 
@@ -27,16 +26,19 @@ import {
  * through the provider. Nothing connects here and no state is kept between
  * the redirect and this call, so the callback may arrive in another request
  * or process; the next discovery or tool call connects. The route that
- * handles the callback doesn't need an `MCPAdapter` at all, just the same
- * server config.
+ * handles the callback doesn't need an `MCPAdapter` at all — only a provider
+ * that reads and writes the same storage as the one on the adapter's server
+ * config.
  *
+ * @throws {ZodError} if `callbackParams` is not a `URLSearchParams`, or
+ * `options` doesn't match `FinishAuthOptions`.
  * @throws {MCPClientError} for a stdio or otherwise invalid server, a
  * provider that is not an `OAuthClientProvider`, a `state` mismatch, an
  * `error=` callback, or a failed exchange (the SDK error is the `cause`; it
  * may carry callback text, so don't display it).
  */
 export async function finishAuth(
-  server: StreamableHTTPConnection | SSEConnection,
+  server: HTTPConnection,
   callbackParams: URLSearchParams,
   options?: FinishAuthOptions
 ): Promise<void> {
@@ -47,28 +49,29 @@ export async function finishAuth(
   if (!resolved.success) {
     if (StdioConnectionSchema.safeParse(server).success)
       throw new MCPClientError(
-        "OAuth applies to HTTP and SSE servers, but this configuration uses stdio"
+        "finishAuth requires an HTTP or SSE server; this configuration uses stdio"
       );
 
     throw new MCPClientError(
-      "finishAuth requires an HTTP or SSE server configuration",
+      "finishAuth received an invalid HTTP or SSE server configuration",
       undefined,
       { cause: resolved.error }
     );
   }
 
   const connection = resolved.data;
-  const { url } = connection;
+  // Messages below print only the origin: the full URL can carry
+  // credentials or secrets in its userinfo, path or query.
+  const origin = new URL(connection.url).origin;
 
   const provider = oAuthClientProviderSchema.safeParse(connection.authProvider);
   if (!provider.success)
     throw new MCPClientError(
-      `finishAuth requires an OAuthClientProvider for ${url}`,
-      url
+      `finishAuth requires an OAuthClientProvider for ${origin}`
     );
 
   if (expectedState !== undefined)
-    assertCallbackState(params, expectedState, url);
+    assertCallbackState(params, expectedState, origin);
 
   try {
     await new ConnectionManager().finishAuth(
@@ -85,14 +88,14 @@ export async function finishAuth(
     if (IssuerMismatchError.isInstance(error)) {
       if (error.kind === "authorization_response")
         throw new MCPClientError(
-          `OAuth authorization for ${url} failed: the callback's issuer does not match the authorization server (RFC 9207), so the code was not redeemed.`,
-          url,
+          `OAuth authorization for ${origin} failed: the callback's issuer does not match the authorization server (RFC 9207), so the code was not redeemed.`,
+          undefined,
           { cause: error }
         );
 
       throw new MCPClientError(
-        `OAuth authorization for ${url} failed: the authorization server's metadata issuer does not match the URL it was fetched from (RFC 8414).`,
-        url,
+        `OAuth authorization for ${origin} failed: the authorization server's metadata issuer does not match the URL it was fetched from (RFC 8414).`,
+        undefined,
         { cause: error }
       );
     }
@@ -103,15 +106,15 @@ export async function finishAuth(
     if (!params.get("code") && OAuthError.isInstance(error)) {
       const code = knownCallbackErrorCode(params);
       throw new MCPClientError(
-        `OAuth authorization for ${url} failed: the callback reported ${code ? `"${code}"` : "an error"}, so no code was redeemed.`,
-        url,
+        `OAuth authorization for ${origin} failed: the callback reported ${code ? `"${code}"` : "an error"}, so no code was redeemed.`,
+        undefined,
         { cause: error }
       );
     }
 
     throw new MCPClientError(
-      `OAuth authorization for ${url} failed: ${error}.${discoveryStateHint(provider.data)}`,
-      url,
+      `OAuth authorization for ${origin} failed: ${error}.${discoveryStateHint(provider.data)}`,
+      undefined,
       { cause: error }
     );
   }
