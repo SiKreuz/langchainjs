@@ -35,7 +35,7 @@ import {
  * @throws {MCPClientError} for a stdio or otherwise invalid server, a
  * provider that is not an `OAuthClientProvider`, a `state` mismatch, an
  * `error=` callback, or a failed exchange (the SDK error is the `cause`; it
- * may carry callback text, so don't display it).
+ * may carry callback text or the full server URL, so don't display it).
  */
 export async function finishAuth(
   server: HTTPConnection,
@@ -112,8 +112,11 @@ export async function finishAuth(
       );
     }
 
+    // The SDK's text can quote the full server URL or text the authorization
+    // server sent, so it stays in `cause`.
+    const kind = error instanceof Error ? error.name : "unknown error";
     throw new MCPClientError(
-      `OAuth authorization for ${origin} failed: ${error}.${discoveryStateHint(provider.data)}`,
+      `OAuth authorization for ${origin} failed (${kind}); the SDK error is the cause.${discoveryStateHint(provider.data)}`,
       undefined,
       { cause: error }
     );

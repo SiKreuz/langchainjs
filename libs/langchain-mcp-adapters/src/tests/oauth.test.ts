@@ -648,24 +648,34 @@ describe("finishAuth", () => {
     expect(error.cause).toBeInstanceOf(ZodError);
   });
 
-  it("keeps the server URL's userinfo, path and query out of every error message", async () => {
-    const secretUrl = "https://user:pw@host/mcp/SECRETPATH?api_key=SECRETQ";
-    const error = await failure(
-      finishAuth(
-        {
-          transport: "http",
-          url: secretUrl,
-          authProvider: createTestOAuthProvider(),
-        },
-        new URLSearchParams({ code: "c", state: "actual" }),
-        { expectedState: "expected" }
-      )
-    );
-    expect(error.message).toContain("https://host");
-    expect(error.message).not.toContain("user:pw");
-    expect(error.message).not.toContain("SECRETPATH");
-    expect(error.message).not.toContain("SECRETQ");
-  });
+  it.each([
+    ["a state mismatch", false],
+    ["SDK error text that quotes it", true],
+  ])(
+    "keeps the server URL's secrets out of %s",
+    async (_label, sdkQuotesUrl) => {
+      const secretUrl = "https://user:pw@host/mcp/SECRETPATH?api_key=SECRETQ";
+      const spy = vi.spyOn(ConnectionManager.prototype, "finishAuth");
+      if (sdkQuotesUrl)
+        spy.mockRejectedValueOnce(
+          new Error(`Protected resource does not match expected ${secretUrl}`)
+        );
+      try {
+        const error = await failure(
+          finishAuth(
+            { url: secretUrl, authProvider: createTestOAuthProvider() },
+            new URLSearchParams({ code: "c", state: "actual" }),
+            sdkQuotesUrl ? undefined : { expectedState: "expected" }
+          )
+        );
+        expect(error.message).toContain("https://host");
+        for (const secret of ["user:pw", "SECRETPATH", "SECRETQ"])
+          expect(error.message).not.toContain(secret);
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  );
 
   it("completes a per-user provider's login via finishAuth", async () => {
     const server = await fixture();

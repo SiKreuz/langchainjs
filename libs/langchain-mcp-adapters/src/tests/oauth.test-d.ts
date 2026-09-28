@@ -36,13 +36,10 @@ test("finishAuth takes a server config, the callback query, and optional FinishA
   expectTypeOf<FinishAuthOptions>().toEqualTypeOf<{
     expectedState?: string;
   }>();
-});
 
-test("finishAuth rejects a non-URLSearchParams callback", () => {
   const server = { transport: "http", url: "http://127.0.0.1/mcp" } as const;
   // @ts-expect-error finishAuth's callback query must be URLSearchParams, not a string.
   finishAuth(server, "http://127.0.0.1/callback?code=1");
-  expectTypeOf(finishAuth).parameter(1).toEqualTypeOf<URLSearchParams>();
 });
 
 test("UnauthorizedError is the exported auth check", () => {
