@@ -5,7 +5,6 @@ import {
   finishAuth,
   type AuthProvider,
   type FinishAuthOptions,
-  type OAuthClientProvider,
   type SSEConnection,
   type StreamableHTTPConnection,
 } from "../index.js";
@@ -39,15 +38,11 @@ test("finishAuth takes a server config, the callback query, and optional FinishA
   }>();
 });
 
-test("finishAuth rejects a non-URLSearchParams callback and a token-only provider", () => {
+test("finishAuth rejects a non-URLSearchParams callback", () => {
   const server = { transport: "http", url: "http://127.0.0.1/mcp" } as const;
   // @ts-expect-error finishAuth's callback query must be URLSearchParams, not a string.
   finishAuth(server, "http://127.0.0.1/callback?code=1");
-
-  // @ts-expect-error a token-only AuthProvider is not an OAuthClientProvider.
-  const bad: OAuthClientProvider = { token: async () => "x" };
-  finishAuth({ ...server, authProvider: bad }, new URLSearchParams());
-  expectTypeOf<AuthProvider>().not.toExtend<OAuthClientProvider>();
+  expectTypeOf(finishAuth).parameter(1).toEqualTypeOf<URLSearchParams>();
 });
 
 test("UnauthorizedError is the exported auth check", () => {

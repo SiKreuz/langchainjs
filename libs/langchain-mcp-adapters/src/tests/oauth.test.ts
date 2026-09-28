@@ -3,6 +3,7 @@ import { z, ZodError } from "zod";
 import {
   IssuerMismatchError,
   OAuthError,
+  SSEClientTransport,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
 import {
@@ -405,6 +406,8 @@ async function pendingLogin(
     state?: string;
     persistDiscovery?: boolean;
     transport?: "http" | "sse";
+    /** Which field spells out an SSE server; ignored for HTTP. */
+    sseSpelling?: "transport" | "type";
   } = {}
 ) {
   const server = await fixture({ iss: options.iss });
@@ -413,15 +416,22 @@ async function pendingLogin(
     persistDiscovery: options.persistDiscovery,
   });
   const transport = options.transport ?? "http";
+  const sseSpelling = options.sseSpelling ?? "transport";
   // A widened `transport` variable does not narrow the discriminated
   // union below, so each branch is written with its literal directly.
   const serverConfig =
     transport === "sse"
-      ? ({
-          transport: "sse",
-          url: server.sseUrl,
-          authProvider: provider,
-        } satisfies SSEConnection)
+      ? sseSpelling === "type"
+        ? ({
+            type: "sse",
+            url: server.sseUrl,
+            authProvider: provider,
+          } satisfies SSEConnection)
+        : ({
+            transport: "sse",
+            url: server.sseUrl,
+            authProvider: provider,
+          } satisfies SSEConnection)
       : ({
           transport: "http",
           url: server.mcpUrl,
@@ -448,14 +458,24 @@ describe("finishAuth", () => {
     }
   );
 
-  it("completes the exchange for an SSE server", async () => {
-    const { server, provider, serverConfig, callback } = await pendingLogin({
-      transport: "sse",
-    });
-    await finishAuth(serverConfig, callback);
-    expect(provider.stored.tokens?.access_token).toBeDefined();
-    expect(server.stats.exchanges).toBe(1);
-  });
+  it.each(["transport", "type"] as const)(
+    "completes the exchange for an SSE server (spelled via %s)",
+    async (sseSpelling) => {
+      const { server, provider, serverConfig, callback } = await pendingLogin({
+        transport: "sse",
+        sseSpelling,
+      });
+      const close = vi.spyOn(SSEClientTransport.prototype, "close");
+      try {
+        await finishAuth(serverConfig, callback);
+        expect(close).toHaveBeenCalledTimes(1);
+      } finally {
+        close.mockRestore();
+      }
+      expect(provider.stored.tokens?.access_token).toBeDefined();
+      expect(server.stats.exchanges).toBe(1);
+    }
+  );
 
   it("rejects a tampered iss before redeeming the code, without echoing callback text", async () => {
     const { server, provider, serverConfig, callback } = await pendingLogin();
@@ -487,6 +507,7 @@ describe("finishAuth", () => {
       .mockRejectedValueOnce(mismatch);
     try {
       const error = await failure(finishAuth(serverConfig, callback));
+      expect(spy.mock.calls[0][0].authProvider).toBe(serverConfig.authProvider);
       expect(error.cause).toBe(mismatch);
       expect(error.message).toContain(
         "the authorization server's metadata issuer does not match the URL it was fetched from (RFC 8414)"
@@ -589,7 +610,6 @@ describe("finishAuth", () => {
   });
 
   it("rejects a stdio server and a token-only provider", async () => {
-    const server = await fixture();
     const params = new URLSearchParams({ code: "c" });
     const stdioError = await failure(
       finishAuth(
@@ -598,7 +618,7 @@ describe("finishAuth", () => {
       )
     );
     expect(stdioError.message).toMatch(
-      /^OAuth applies to HTTP and SSE servers, but this configuration uses stdio/
+      /^finishAuth requires an HTTP or SSE server; this configuration uses stdio/
     );
 
     // Anchored: the SDK's own message also names OAuthClientProvider.
@@ -606,7 +626,7 @@ describe("finishAuth", () => {
       finishAuth(
         {
           transport: "http",
-          url: server.mcpUrl,
+          url: "http://127.0.0.1:9/mcp",
           authProvider: { token: async () => "t" },
         },
         params
@@ -615,6 +635,55 @@ describe("finishAuth", () => {
     expect(tokenError.message).toMatch(
       /^finishAuth requires an OAuthClientProvider/
     );
+  });
+
+  it("rejects an otherwise invalid server configuration", async () => {
+    const params = new URLSearchParams({ code: "c" });
+    const error = await failure(
+      finishAuth({ url: "not a url" } as never, params)
+    );
+    expect(error.message).toMatch(
+      /^finishAuth received an invalid HTTP or SSE server configuration/
+    );
+    expect(error.cause).toBeInstanceOf(ZodError);
+  });
+
+  it("keeps the server URL's userinfo, path and query out of every error message", async () => {
+    const secretUrl = "https://user:pw@host/mcp/SECRETPATH?api_key=SECRETQ";
+    const error = await failure(
+      finishAuth(
+        {
+          transport: "http",
+          url: secretUrl,
+          authProvider: createTestOAuthProvider(),
+        },
+        new URLSearchParams({ code: "c", state: "actual" }),
+        { expectedState: "expected" }
+      )
+    );
+    expect(error.message).toContain("https://host");
+    expect(error.message).not.toContain("user:pw");
+    expect(error.message).not.toContain("SECRETPATH");
+    expect(error.message).not.toContain("SECRETQ");
+  });
+
+  it("completes a per-user provider's login via finishAuth", async () => {
+    const server = await fixture();
+    const provider = createTestOAuthProvider();
+    const serverConfig = {
+      transport: "http",
+      url: server.mcpUrl,
+      authProvider: { token: async () => "not-valid" },
+    } satisfies StreamableHTTPConnection;
+    const mcp = adapter({ servers: { svc: serverConfig } });
+    await failure(mcp.listToolsets({ authProvider: provider }));
+    await finishAuth(
+      { ...serverConfig, authProvider: provider },
+      await authorizeInBrowser(provider.redirects[0])
+    );
+    expect(
+      hasWhoami((await mcp.listToolsets({ authProvider: provider })).svc)
+    ).toBe(true);
   });
 
   it("sends no MCP request and closes the transport it creates", async () => {
