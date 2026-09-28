@@ -130,6 +130,12 @@ and token endpoints, not only to the MCP server, so don't pair a secret API
 key with an OAuth provider whose authorization server lives on another
 origin.
 
+A per-call `authProvider` or `headers` override applies to every HTTP and SSE
+server the adapter holds, not only the one you named. Each distinct provider
+object also gets its own connection, kept until `close()`. Reuse one provider
+object per user rather than creating one per call, and use a single-server
+adapter when different users need different credentials.
+
 ## Examples
 
 - [Examples](https://github.com/langchain-ai/langchainjs/tree/main/libs/langchain-mcp-adapters/examples): local servers, mixed modes, agents and hooks.
